@@ -1,124 +1,104 @@
+from __future__ import annotations
 """From https://medium.com/@nicholas.w.swift/easy-a-star-pathfinding-7e6689c7f7b2"""
 
+from typing import Union, Tuple, Optional
+from scene.node import Node
+from scene.scene import Scene
+from scene.path import Path
 
+from sortedcollections import SortedList, SortedSet
+from scene.coor_converter import *
 
-class Node():
+MOVE_DIRECTIONS = SortedSet(
+    (Node(x, y) for x in {-1, 0, 1} for y in {-1, 0, 1} if (x, y) != (0, 0)),
+    key=lambda node: node.get_xy())
+
+class AStarNode(Node):
     """A node class for A* Pathfinding"""
+    parent: AStarNode
 
-    def __init__(self, parent=None, position=None):
+    def __init__(self,
+            position: Union[Node, Tuple[int, int]],
+            parent: Optional[AStarNode]=None):
+        # either we already have a node object or we have to create it
+        super(AStarNode, self).__init__(*(position.get_xy() if isinstance(position, Node) else position))
         self.parent = parent
-        self.position = position
 
-        self.g = 0
-        self.h = 0 
-        self.f = 0 # total cost
+        self.distance_to_start = 0 # distance to start
+        self.heuristic_cost = 0 # heuristic
+        self.total_cost = 0 # total cost
 
-    def __eq__(self, other):
-        return self.position == other.position
+    def set_cost(self, target_node: Optional[AStarNode]=None) -> None:
+        self.distance_to_start = self.parent.distance_to_start + 1 if self.parent else 0
+        #heuristic: squared euclidian distance
+        self.heuristic_cost = ((self.x - target_node.x) ** 2) + ((self.y - target_node.y) ** 2) if target_node else 0
 
+        self.total_cost = self.distance_to_start + self.heuristic_cost
 
-def astar(maze, start, end):
-    """Returns a list of tuples as a path from the given start to the given end in the given maze"""
+    def generate_path(self) -> Path:
+        if self.parent: 
+            return self.parent.generate_path() + self
+        else:
+            return Path([self])
 
-    # Create start and end node
-    start_node = Node(None, start)
-    start_node.g = start_node.h = start_node.f = 0
-    end_node = Node(None, end)
-    end_node.g = end_node.h = end_node.f = 0
+    def __str__(self):
+        return "AStarNode {}x{}".format(self.x, self.y)
+        
+class AStar:
+    origin_node: AStarNode
+    target_node: AStarNode
 
-    # Initialize both open and closed list
-    open_list = []
-    closed_list = []
+    scene: Scene
 
-    # Add the start node
-    open_list.append(start_node)
+    def __init__(self, scene: Scene, converter: CoorConverter):
+        self.scene = scene
+        self.converter = converter
+    
+    def compute(self) -> Optional[Path]:
+        # grab origin and target
+        self.origin_node = AStarNode(self.converter.convert_node(SCENE, GRID, self.scene.origin))
+        self.target_node = AStarNode(self.converter.convert_node(SCENE, GRID, self.scene.target))
+        self.origin_node.set_cost(self.target_node)
+        self.target_node.set_cost(self.target_node)
 
-    # Loop until you find the end
-    while len(open_list) > 0:
+        # Initialize both open (with the start node) and closed list
+        closed_nodes_set = set()
+        open_nodes_sorted_set = SortedSet([self.origin_node], key=lambda x: x.total_cost)
 
-        # Get the current node
-        current_node = open_list[0]
-        current_index = 0
-        for index, item in enumerate(open_list):
-            if item.f < current_node.f:
-                current_node = item
-                current_index = index
+        # Loop until you find the end
+        while open_nodes_sorted_set:
+            # Get the current node (less costly item)
+            # Pop current off open list, add to closed list
+            current_node = open_nodes_sorted_set.pop(0)
+            closed_nodes_set.add(current_node)
 
-        # Pop current off open list, add to closed list
-        open_list.pop(current_index)
-        closed_list.append(current_node)
+            # Found the goal
+            if current_node == self.target_node: 
+                return current_node.generate_path()
 
-        # Found the goal
-        if current_node == end_node:
-            path = []
-            current = current_node
-            while current is not None:
-                path.append(current.position)
-                current = current.parent
-            return path[::-1] # Return reversed path
+            # Generate children
+            for move_direction in MOVE_DIRECTIONS: # Adjacent squares
+                # Get node position
+                new_node = current_node + move_direction
 
-        # Generate children
-        children = []
-        for new_position in [(0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (-1, 1), (1, -1), (1, 1)]: # Adjacent squares
+                # Make sure within range
+                if (
+                        (new_node.x in range(len(self.scene.grid)) and new_node.y in range(len(self.scene.grid[0]))) and 
+                        self.scene.grid[new_node.x][new_node.y] == 0 and # Make sure walkable terrain
+                        new_node not in closed_nodes_set): # Child is on the closed list
+                    # Create new node
+                    new_astar_node = AStarNode(new_node, current_node)
+                    new_astar_node.set_cost(self.target_node)
 
-            # Get node position
-            node_position = (current_node.position[0] + new_position[0], current_node.position[1] + new_position[1])
+                    # Child is already in the open list, replace the previous value if the cost of the current one is lower
+                    if new_astar_node in open_nodes_sorted_set:
+                        for open_node in open_nodes_sorted_set:
+                            if (new_astar_node == open_node and
+                                    new_astar_node.distance_to_start > open_node.distance_to_start):
+                                open_nodes_sorted_set.discard(open_node)
+                                open_nodes_sorted_set.add(new_astar_node)
 
-            # Make sure within range
-            if node_position[0] > (len(maze) - 1) or node_position[0] < 0 or node_position[1] > (len(maze[len(maze)-1]) -1) or node_position[1] < 0:
-                continue
+                    # Add the child to the open list
+                    open_nodes_sorted_set.add(new_astar_node)
 
-            # Make sure walkable terrain
-            if maze[node_position[0]][node_position[1]] != 0:
-                continue
-
-            # Create new node
-            new_node = Node(current_node, node_position)
-
-            # Append
-            children.append(new_node)
-
-        # Loop through children
-        for child in children:
-
-            # Child is on the closed list
-            for closed_child in closed_list:
-                if child == closed_child:
-                    continue
-
-            # Create the f, g, and h values
-            child.g = current_node.g + 1
-            child.h = ((child.position[0] - end_node.position[0]) ** 2) + ((child.position[1] - end_node.position[1]) ** 2)
-            child.f = child.g + child.h
-
-            # Child is already in the open list
-            for open_node in open_list:
-                if child == open_node and child.g > open_node.g:
-                    continue
-
-            # Add the child to the open list
-            open_list.append(child)
-
-
-def main():
-
-    maze = [[0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
-
-    start = (0, 0)
-    end = (7, 6)
-
-    path = astar(maze, start, end)
-    print(path)
-
-
-if __name__ == '__main__':
-    main()
+        return None

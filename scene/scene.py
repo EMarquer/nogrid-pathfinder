@@ -4,8 +4,10 @@ from math import ceil, floor
 
 from .node import Node
 from .path import Path
-from .obstacle import Obstacle
+#from .obstacle import Obstacle
+from .shapes import *
 
+Obstacle = Shape
 class Scene:
     x_size: float
     y_size: float
@@ -32,11 +34,11 @@ class Scene:
             ):
         self.x_size = x_size
         self.y_size = y_size
+    
+        self.obstacles = obstacles
 
         self.grid_precision = grid_precision
         self.prepare_grid()
-    
-        self.obstacles = obstacles
 
         self.origin = origin
         self.target = target
@@ -52,9 +54,13 @@ class Scene:
 
     def prepare_grid(self):
         self.grid = [
-            [0 for j in range(ceil(self.y_size/self.grid_precision))]
+            [1 if self.in_obstacle(i, j) else 0 for j in range(ceil(self.y_size/self.grid_precision))]
             for i in range(ceil(self.x_size/self.grid_precision))
         ]
+
+    def in_obstacle(self, x: int, y: int) -> bool:
+        node = Node(x * self.grid_precision, y * self.grid_precision)
+        return any(obstacle.contains_node(node) for obstacle in self.obstacles)
 
     def get_tile(self, x: float, y: float):
         return self.grid[floor(x)][floor(y)]
@@ -64,6 +70,10 @@ class Scene:
     def set_grid_precision(self, grid_precision: float):
         self.grid_precision = grid_precision
         self.prepare_grid()
+
+    def set_astar_path(self, astar_path: Path):
+        self.astar_path = None
+        self.astar_path = astar_path
 
     def __str__(self):
         return "\n".join([
